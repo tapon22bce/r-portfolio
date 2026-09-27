@@ -1,0 +1,178 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#fff}svg{display:block}</style></head>
+<body><svg id="svg" xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500"></svg>
+<script>// Shared teaser library: deterministic, time-driven SVG scenes (frame(t) sets all state).
+const NS = 'http://www.w3.org/2000/svg';
+const FONT = "Arial,'Liberation Sans','DejaVu Sans',sans-serif";
+const C = {
+  bg: '#ffffff', ink: '#1f2937', mut: '#6b7280', line: '#d1d5db', soft: '#f3f4f6',
+  blue: '#2563eb', teal: '#0d9488', amber: '#d97706', rose: '#e11d48', vio: '#7c3aed', green: '#16a34a',
+  blueL: '#dbeafe', tealL: '#ccfbf1', amberL: '#fef3c7', roseL: '#ffe4e6', vioL: '#ede9fe', greenL: '#dcfce7'
+};
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = x => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const ph = (t, a, b) => ease(clamp((t - a) / (b - a)));   // eased progress a->b
+const lin = (t, a, b) => clamp((t - a) / (b - a));         // linear progress a->b
+const rng = seed => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const op = (e, v) => e.setAttribute('opacity', v);
+function hex(c) { return [1, 3, 5].map(i => parseInt(c.substr(i, 2), 16)); }
+function mix(c1, c2, u) {
+  const a = hex(c1), b = hex(c2);
+  return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * clamp(u)).toString(16).padStart(2, '0')).join('');
+}
+function txt(p, x, y, s, o = {}) {
+  const lines = String(s).split('\n');
+  const lh = (o.size || 12) * 1.25;
+  const e = el('text', {
+    x, y: o.mid ? y - (lines.length - 1) * lh / 2 + (o.size || 12) * .35 : y,
+    'font-size': o.size || 12, 'font-weight': o.weight || 400, fill: o.fill || C.ink,
+    'text-anchor': o.anchor || 'start', style: 'white-space:pre',
+    'font-family': o.mono ? "'DejaVu Sans Mono',Menlo,monospace" : FONT
+  }, p);
+  lines.forEach((l, i) => { const ts = el('tspan', { x, dy: i ? lh : 0 }, e); ts.textContent = l; });
+  e.setText = str => { const L = String(str).split('\n'); while (e.firstChild) e.removeChild(e.firstChild);
+    L.forEach((l, i) => { const ts = el('tspan', { x, dy: i ? lh : 0 }, e); ts.textContent = l; }); };
+  return e;
+}
+function box(p, x, y, w, h, o = {}) {
+  return el('rect', { x, y, width: w, height: h, rx: o.r ?? 8, fill: o.fill || '#fff', stroke: o.stroke || C.line, 'stroke-width': o.sw || 1.5,
+    ...(o.dash ? { 'stroke-dasharray': o.dash } : {}) }, p);
+}
+// labelled card: returns {g, r, t, s}
+function node(p, x, y, w, h, title, sub, o = {}) {
+  const g = el('g', {}, p);
+  const r = box(g, x, y, w, h, o);
+  let t, s;
+  if (sub) {
+    t = txt(g, x + w / 2, y + h / 2 - 2, title, { size: o.size || 12, weight: 700, anchor: 'middle', fill: o.tc || C.ink });
+    s = txt(g, x + w / 2, y + h / 2 + 12, sub, { size: o.ss || 9.5, anchor: 'middle', fill: C.mut });
+  } else {
+    t = txt(g, x + w / 2, y + h / 2, title, { size: o.size || 12, weight: 700, anchor: 'middle', fill: o.tc || C.ink, mid: true });
+  }
+  return { g, r, t, s, set(fill, stroke) { r.setAttribute('fill', fill); r.setAttribute('stroke', stroke); } };
+}
+// progressively drawn arrow along polyline pts
+function arrow(p, pts, o = {}) {
+  const col = o.c || C.mut;
+  const d = 'M' + pts.map(q => q.join(',')).join(' L');
+  const path = el('path', { d, fill: 'none', stroke: col, 'stroke-width': o.w || 1.8, pathLength: 1,
+    'stroke-dasharray': '1 1', 'stroke-dashoffset': 1, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, p);
+  const a = pts[pts.length - 2], b = pts[pts.length - 1];
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI, s = o.h || 7;
+  const head = el('polygon', { points: `0,0 ${-s},${-s * .55} ${-s},${s * .55}`, fill: col, opacity: 0,
+    transform: `translate(${b[0]},${b[1]}) rotate(${ang})` }, p);
+  return {
+    path, head,
+    set(u) { path.setAttribute('stroke-dashoffset', 1 - u); op(head, u > .97 ? 1 : 0); },
+    at(u) { const L = path.getTotalLength(); const q = path.getPointAtLength(L * clamp(u)); return [q.x, q.y]; },
+    color(c) { path.setAttribute('stroke', c); head.setAttribute('fill', c); }
+  };
+}
+// travelling packet dot
+function dot(p, c = C.blue, r = 3.5) { const e = el('circle', { r, fill: c, opacity: 0 }, p);
+  return { e, set(pt, o = 1) { if (!pt) { op(e, 0); return; } e.setAttribute('cx', pt[0]); e.setAttribute('cy', pt[1]); op(e, o); } }; }
+function poly(p, c = C.blue, w = 1.6) { return el('polyline', { fill: 'none', stroke: c, 'stroke-width': w, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, p); }
+function setWave(pl, x, y, w, fn, n = 70) {
+  let s = ''; for (let i = 0; i <= n; i++) { const u = i / n; s += (x + u * w).toFixed(1) + ',' + (y + fn(u)).toFixed(1) + ' '; }
+  pl.setAttribute('points', s);
+}
+function typed(e, full, u) { e.setText(full.slice(0, Math.floor(full.length * clamp(u)))); }
+function leaf(p, x, y, s, spots = true) {
+  const G = el('g', { transform: `translate(${x},${y}) scale(${s})` }, p);
+  el('path', { d: 'M0,40 C10,-10 60,-10 80,40 C60,90 10,90 0,40 Z', fill: '#86efac', stroke: C.green, 'stroke-width': 2 }, G);
+  el('path', { d: 'M0,40 L80,40 M20,40 L36,22 M20,40 L36,58 M45,40 L60,26 M45,40 L60,54', stroke: C.green, 'stroke-width': 1.2, fill: 'none' }, G);
+  const sp = [];
+  if (spots) [[30, 24, 5], [52, 52, 6], [40, 38, 4], [62, 32, 3.5]].forEach(q => sp.push(el('circle', { cx: q[0], cy: q[1], r: q[2], fill: '#92400e', opacity: .85 }, G)));
+  return { G, sp };
+}
+
+// Scene bootstrap: header, footer, loop fade
+function scene(cfg) {
+  const svg = document.getElementById('svg');
+  el('rect', { width: 800, height: 500, fill: C.bg }, svg);
+  txt(svg, 28, 34, cfg.name, { size: 21, weight: 700 });
+  txt(svg, 28, 50, cfg.sub, { size: 11, fill: C.mut });
+  const tw = cfg.tag.length * 6.1 + 22;
+  el('rect', { x: 772 - tw, y: 16, width: tw, height: 22, rx: 11, fill: C.soft, stroke: C.line }, svg);
+  txt(svg, 772 - tw / 2, 31, cfg.tag, { size: 10.5, anchor: 'middle', fill: C.mut, weight: 700 });
+  el('line', { x1: 28, x2: 772, y1: 60, y2: 60, stroke: C.line }, svg);
+  const g = el('g', {}, svg);
+  txt(svg, 28, 486, cfg.cap, { size: 11, fill: C.mut });
+  txt(svg, 772, 486, 'Schematic illustration', { size: 10, fill: '#9ca3af', anchor: 'end' });
+  const f = cfg.build(g);
+  window.SCENE = cfg;
+  window.frame = t => { op(g, ph(t, 0, .5) * (1 - ph(t, cfg.T - .6, cfg.T))); f(t); };
+  window.frame(0);
+}
+</script><script>scene({
+  name: 'Machine Vision Third Eye', tag: 'BTech Engineering Clinics · 2023', T: 10, poster: 7.4,
+  sub: 'Non-invasive eye-tracking interaction for safe driving and navigation assistance (WebGazer.js + OpenCV)',
+  cap: 'Webcam → eye-region detection → gaze regression → on-road attention monitoring',
+  build(g) {
+    // left: webcam frame
+    box(g, 28, 78, 250, 250, { r: 12, fill: '#f9fafb' });
+    txt(g, 42, 98, 'Webcam frame · OpenCV', { size: 11, weight: 700, fill: C.mut });
+    el('ellipse', { cx: 153, cy: 205, rx: 62, ry: 78, fill: '#fde7d3', stroke: '#c08457', 'stroke-width': 2 }, g);
+    const eyeC = [[128, 185], [178, 185]];
+    const eyes = eyeC.map(c => { el('ellipse', { cx: c[0], cy: c[1], rx: 15, ry: 8, fill: '#fff', stroke: C.ink, 'stroke-width': 1.4 }, g); return el('circle', { cx: c[0], cy: c[1], r: 5, fill: '#1f2937' }, g); });
+    el('path', { d: 'M148,200 q5,22 -6,28 M150,240 q13,8 26,0', fill: 'none', stroke: '#c08457', 'stroke-width': 1.6 }, g);
+    const roi = eyeC.map(c => el('rect', { x: c[0] - 22, y: c[1] - 15, width: 44, height: 30, rx: 4, fill: 'none', stroke: C.blue, 'stroke-width': 2, 'stroke-dasharray': '5 3' }, g));
+    const lmk = []; eyeC.forEach(c => { for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; lmk.push(el('circle', { cx: c[0] + 15 * Math.cos(a), cy: c[1] + 8 * Math.sin(a), r: 1.8, fill: C.blue }, g)); } });
+    const scanL = el('line', { x1: 40, x2: 266, stroke: C.blue, 'stroke-width': 1.4, opacity: .5 }, g);
+    // zoom inset
+    box(g, 42, 268, 100, 50, { r: 8, fill: '#fff', stroke: C.blue });
+    el('ellipse', { cx: 92, cy: 293, rx: 36, ry: 16, fill: '#fff', stroke: C.ink, 'stroke-width': 1.4 }, g);
+    const zp = el('circle', { cy: 293, r: 11, fill: '#1f2937' }, g); const zg = el('circle', { r: 3, fill: '#fff' }, g);
+    txt(g, 200, 296, 'iris / pupil', { size: 10, fill: C.mut, anchor: 'middle' }); txt(g, 200, 310, 'feature extraction', { size: 10, fill: C.mut, anchor: 'middle' });
+    // middle
+    const wg = node(g, 300, 150, 130, 110, 'WebGazer.js', 'regression: eye features\n→ screen (x, y)', { size: 12, fill: C.tealL, stroke: C.teal, tc: C.teal });
+    const A = [arrow(g, [[278, 205], [298, 205]], { c: C.blue }), arrow(g, [[430, 205], [458, 205]], { c: C.teal })];
+    // right: scene
+    box(g, 458, 78, 314, 250, { r: 12, fill: '#f9fafb' });
+    txt(g, 472, 98, 'Road view · gaze estimate', { size: 11, weight: 700, fill: C.mut });
+    const sx = 470, sy = 108, sw = 290, sh = 206;
+    el('rect', { x: sx, y: sy, width: sw, height: sh * .42, fill: '#dbeafe' }, g);
+    el('rect', { x: sx, y: sy + sh * .42, width: sw, height: sh * .58, fill: '#d1d5db' }, g);
+    const hz = sy + sh * .42, vx = sx + sw / 2;
+    el('polygon', { points: `${vx - 8},${hz} ${vx + 8},${hz} ${sx + sw - 20},${sy + sh} ${sx + 20},${sy + sh}`, fill: '#9ca3af' }, g);
+    el('line', { x1: vx, y1: hz, x2: vx, y2: sy + sh, stroke: '#fff', 'stroke-width': 2, 'stroke-dasharray': '10 8' }, g);
+    el('rect', { x: vx - 14, y: hz + 6, width: 28, height: 16, rx: 3, fill: C.rose }, g);
+    el('rect', { x: sx + 20, y: hz - 30, width: 26, height: 30, fill: '#6b7280' }, g); el('rect', { x: sx + sw - 46, y: hz - 40, width: 26, height: 40, fill: '#6b7280' }, g);
+    const trail = [0, 1, 2, 3, 4, 5].map(() => el('circle', { r: 8, fill: C.amber }, g));
+    const gaze = el('g', {}, g); el('circle', { r: 13, fill: 'none', stroke: C.rose, 'stroke-width': 2.4 }, gaze); el('path', { d: 'M-19,0 H-8 M8,0 H19 M0,-19 V-8 M0,8 V19', stroke: C.rose, 'stroke-width': 2.4 }, gaze);
+    // status
+    const st1 = node(g, 28, 350, 250, 54, '', null, { r: 10 }), st1t = txt(st1.g, 153, 382, '', { size: 12, weight: 700, anchor: 'middle' });
+    const st2 = node(g, 300, 350, 130, 54, 'Dwell time', null, { size: 11 }); const dw = el('rect', { x: 310, y: 385, width: 0, height: 8, rx: 4, fill: C.amber }, g); el('rect', { x: 310, y: 385, width: 110, height: 8, rx: 4, fill: 'none', stroke: C.line }, g);
+    const st3 = node(g, 458, 350, 314, 54, '', null, { r: 10 }), st3t = txt(st3.g, 615, 376, '', { size: 12, weight: 700, anchor: 'middle' }), st3s = txt(st3.g, 615, 393, '', { size: 10, anchor: 'middle', fill: C.mut });
+    // gaze waypoints (screen coords 0..1) with dwell
+    const WP = [[.5, .55, 0], [.5, .5, 1.6], [.12, .2, 3.0], [.5, .55, 4.2], [.9, .18, 5.6], [.9, .18, 7.4], [.5, .55, 8.6]];
+    const gz = t => { for (let i = WP.length - 1; i >= 0; i--) if (t >= WP[i][2]) { const a = WP[i], b = WP[Math.min(i + 1, WP.length - 1)]; const u = ph(t, a[2] + (i < WP.length - 1 ? (b[2] - a[2]) * .55 : 0), b[2]); return i === WP.length - 1 ? [a[0], a[1]] : [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]; } return [.5, .55]; };
+    return t => {
+      const p = gz(t); const X = sx + p[0] * sw, Y = sy + p[1] * sh;
+      gaze.setAttribute('transform', `translate(${X},${Y})`);
+      trail.forEach((c, i) => { const q = gz(Math.max(0, t - (i + 1) * .09)); c.setAttribute('cx', sx + q[0] * sw); c.setAttribute('cy', sy + q[1] * sh); c.setAttribute('r', 8 - i); op(c, .28 - i * .04); });
+      const dx = (p[0] - .5) * 9, dy = (p[1] - .5) * 5;
+      eyes.forEach((e, i) => { e.setAttribute('cx', eyeC[i][0] + dx); e.setAttribute('cy', eyeC[i][1] + dy); });
+      zp.setAttribute('cx', 92 + (p[0] - .5) * 40); zp.setAttribute('cy', 293 + dy * 1.2); zg.setAttribute('cx', 92 + (p[0] - .5) * 40 - 3); zg.setAttribute('cy', 290 + dy * 1.2);
+      roi.forEach(r => op(r, .6 + .4 * Math.sin(t * 5))); lmk.forEach(l => op(l, 1));
+      scanL.setAttribute('y1', 108 + ((t * 70) % 210)); scanL.setAttribute('y2', 108 + ((t * 70) % 210));
+      A[0].set(ph(t, .3, .8)); A[1].set(ph(t, .5, 1));
+      const off = Math.abs(p[0] - .5) > .3; const offT = clamp((t - 5.6) / 1.5) * (t < 7.4 ? 1 : 0) + (t >= 7.4 ? Math.max(0, 1 - (t - 7.4) / .5) : 0);
+      const drift = t > 4.6 && t < 8.6 && off;
+      dw.setAttribute('width', 110 * clamp(drift ? Math.min(1, (t - 5.6) / 1.8) : 0));
+      st1t.setText(!drift ? 'Gaze on road ✓' : 'Attention drift ⚠'); st1t.setAttribute('fill', drift ? C.rose : C.green);
+      st1.r.setAttribute('fill', drift ? C.roseL : C.greenL); st1.r.setAttribute('stroke', drift ? C.rose : C.green);
+      const alert = t > 6.6 && t < 8.6;
+      st3t.setText(alert ? 'Alert: "Eyes on the road"' : 'Monitoring attention'); st3t.setAttribute('fill', alert ? C.rose : C.ink);
+      st3s.setText(alert ? 'prolonged off-road dwell detected' : 'gaze mapped to screen coordinates in real time');
+      st3.r.setAttribute('fill', alert ? C.roseL : '#fff'); st3.r.setAttribute('stroke', alert ? C.rose : C.line);
+    };
+  }
+});
+
+let s=performance.now();(function L(n){frame(((n-s)/1000)%SCENE.T);requestAnimationFrame(L)})(s);</script></body></html>

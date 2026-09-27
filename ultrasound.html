@@ -1,0 +1,169 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#fff}svg{display:block}</style></head>
+<body><svg id="svg" xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500"></svg>
+<script>// Shared teaser library: deterministic, time-driven SVG scenes (frame(t) sets all state).
+const NS = 'http://www.w3.org/2000/svg';
+const FONT = "Arial,'Liberation Sans','DejaVu Sans',sans-serif";
+const C = {
+  bg: '#ffffff', ink: '#1f2937', mut: '#6b7280', line: '#d1d5db', soft: '#f3f4f6',
+  blue: '#2563eb', teal: '#0d9488', amber: '#d97706', rose: '#e11d48', vio: '#7c3aed', green: '#16a34a',
+  blueL: '#dbeafe', tealL: '#ccfbf1', amberL: '#fef3c7', roseL: '#ffe4e6', vioL: '#ede9fe', greenL: '#dcfce7'
+};
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = x => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const ph = (t, a, b) => ease(clamp((t - a) / (b - a)));   // eased progress a->b
+const lin = (t, a, b) => clamp((t - a) / (b - a));         // linear progress a->b
+const rng = seed => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const op = (e, v) => e.setAttribute('opacity', v);
+function hex(c) { return [1, 3, 5].map(i => parseInt(c.substr(i, 2), 16)); }
+function mix(c1, c2, u) {
+  const a = hex(c1), b = hex(c2);
+  return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * clamp(u)).toString(16).padStart(2, '0')).join('');
+}
+function txt(p, x, y, s, o = {}) {
+  const lines = String(s).split('\n');
+  const lh = (o.size || 12) * 1.25;
+  const e = el('text', {
+    x, y: o.mid ? y - (lines.length - 1) * lh / 2 + (o.size || 12) * .35 : y,
+    'font-size': o.size || 12, 'font-weight': o.weight || 400, fill: o.fill || C.ink,
+    'text-anchor': o.anchor || 'start', style: 'white-space:pre',
+    'font-family': o.mono ? "'DejaVu Sans Mono',Menlo,monospace" : FONT
+  }, p);
+  lines.forEach((l, i) => { const ts = el('tspan', { x, dy: i ? lh : 0 }, e); ts.textContent = l; });
+  if (o.at !== undefined) (window.REV = window.REV || []).push([e, o.at]);
+  e.setText = str => { const L = String(str).split('\n'); while (e.firstChild) e.removeChild(e.firstChild);
+    L.forEach((l, i) => { const ts = el('tspan', { x, dy: i ? lh : 0 }, e); ts.textContent = l; }); };
+  return e;
+}
+function box(p, x, y, w, h, o = {}) {
+  const _b = el('rect', { x, y, width: w, height: h, rx: o.r ?? 8, fill: o.fill || '#fff', stroke: o.stroke || C.line, 'stroke-width': o.sw || 1.5,
+    ...(o.dash ? { 'stroke-dasharray': o.dash } : {}) }, p);
+  if (o.at !== undefined) (window.REV = window.REV || []).push([_b, o.at]);
+  return _b;
+}
+// labelled card: returns {g, r, t, s}
+function node(p, x, y, w, h, title, sub, o = {}) {
+  const g = el('g', {}, p);
+  const r = box(g, x, y, w, h, o);
+  let t, s;
+  if (sub) {
+    t = txt(g, x + w / 2, y + h / 2 - 2, title, { size: o.size || 12, weight: 700, anchor: 'middle', fill: o.tc || C.ink });
+    s = txt(g, x + w / 2, y + h / 2 + 12, sub, { size: o.ss || 9.5, anchor: 'middle', fill: C.mut });
+  } else {
+    t = txt(g, x + w / 2, y + h / 2, title, { size: o.size || 12, weight: 700, anchor: 'middle', fill: o.tc || C.ink, mid: true });
+  }
+  return { g, r, t, s, set(fill, stroke) { r.setAttribute('fill', fill); r.setAttribute('stroke', stroke); } };
+}
+// progressively drawn arrow along polyline pts
+function arrow(p, pts, o = {}) {
+  const col = o.c || C.mut;
+  const d = 'M' + pts.map(q => q.join(',')).join(' L');
+  const path = el('path', { d, fill: 'none', stroke: col, 'stroke-width': o.w || 1.8, pathLength: 1,
+    'stroke-dasharray': '1 1', 'stroke-dashoffset': 1, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, p);
+  const a = pts[pts.length - 2], b = pts[pts.length - 1];
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI, s = o.h || 7;
+  const head = el('polygon', { points: `0,0 ${-s},${-s * .55} ${-s},${s * .55}`, fill: col, opacity: 0,
+    transform: `translate(${b[0]},${b[1]}) rotate(${ang})` }, p);
+  return {
+    path, head,
+    set(u) { path.setAttribute('stroke-dashoffset', 1 - u); op(head, u > .97 ? 1 : 0); },
+    at(u) { const L = path.getTotalLength(); const q = path.getPointAtLength(L * clamp(u)); return [q.x, q.y]; },
+    color(c) { path.setAttribute('stroke', c); head.setAttribute('fill', c); }
+  };
+}
+// travelling packet dot
+function dot(p, c = C.blue, r = 3.5) { const e = el('circle', { r, fill: c, opacity: 0 }, p);
+  return { e, set(pt, o = 1) { if (!pt) { op(e, 0); return; } e.setAttribute('cx', pt[0]); e.setAttribute('cy', pt[1]); op(e, o); } }; }
+function poly(p, c = C.blue, w = 1.6) { return el('polyline', { fill: 'none', stroke: c, 'stroke-width': w, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, p); }
+function setWave(pl, x, y, w, fn, n = 70) {
+  let s = ''; for (let i = 0; i <= n; i++) { const u = i / n; s += (x + u * w).toFixed(1) + ',' + (y + fn(u)).toFixed(1) + ' '; }
+  pl.setAttribute('points', s);
+}
+function typed(e, full, u) { e.setText(full.slice(0, Math.floor(full.length * clamp(u)))); }
+function leaf(p, x, y, s, spots = true) {
+  const G = el('g', { transform: `translate(${x},${y}) scale(${s})` }, p);
+  el('path', { d: 'M0,40 C10,-10 60,-10 80,40 C60,90 10,90 0,40 Z', fill: '#86efac', stroke: C.green, 'stroke-width': 2 }, G);
+  el('path', { d: 'M0,40 L80,40 M20,40 L36,22 M20,40 L36,58 M45,40 L60,26 M45,40 L60,54', stroke: C.green, 'stroke-width': 1.2, fill: 'none' }, G);
+  const sp = [];
+  if (spots) [[30, 24, 5], [52, 52, 6], [40, 38, 4], [62, 32, 3.5]].forEach(q => sp.push(el('circle', { cx: q[0], cy: q[1], r: q[2], fill: '#92400e', opacity: .85 }, G)));
+  return { G, sp };
+}
+
+// Scene bootstrap: header, footer, loop fade
+function scene(cfg) {
+  const svg = document.getElementById('svg');
+  el('rect', { width: 800, height: 500, fill: C.bg }, svg);
+  txt(svg, 28, 34, cfg.name, { size: 21, weight: 700 });
+  txt(svg, 28, 50, cfg.sub, { size: 11, fill: C.mut });
+  const tw = cfg.tag.length * 6.1 + 22;
+  el('rect', { x: 772 - tw, y: 16, width: tw, height: 22, rx: 11, fill: C.soft, stroke: C.line }, svg);
+  txt(svg, 772 - tw / 2, 31, cfg.tag, { size: 10.5, anchor: 'middle', fill: C.mut, weight: 700 });
+  el('line', { x1: 28, x2: 772, y1: 60, y2: 60, stroke: C.line }, svg);
+  const g = el('g', {}, svg);
+  txt(svg, 28, 486, cfg.cap, { size: 11, fill: C.mut });
+  txt(svg, 772, 486, 'Schematic illustration', { size: 10, fill: '#9ca3af', anchor: 'end' });
+  const f = cfg.build(g);
+  window.SCENE = cfg;
+  window.frame = t => { op(g, ph(t, 0, .5) * (1 - ph(t, cfg.T - .6, cfg.T))); f(t); (window.REV || []).forEach(r => op(r[0], ph(t, r[1], r[1] + .5))); };
+  window.frame(0);
+}
+</script><script>scene({
+  name: 'Ultrasound Report Generation', tag: 'Plaksha University · 2026 · ongoing', T: 10, poster: 8.2,
+  sub: 'Image–text fusion pipeline: extract visual findings from ultrasound scans and generate structured, clinically interpretable reports',
+  cap: 'Vision encoder + clinical text prompt → cross-modal fusion → structured report for clinician review',
+  build(g) {
+    const r = rng(3);
+    // ultrasound sector
+    box(g, 28, 78, 236, 300, { r: 12, fill: '#f9fafb' });
+    txt(g, 42, 98, 'Ultrasound scan', { size: 11, weight: 700, fill: C.mut });
+    const AX = 146, AY = 112, RR = 250;
+    const a0 = Math.PI / 2 - .55, a1 = Math.PI / 2 + .55;
+    const p = a => [AX + RR * Math.cos(a), AY + RR * Math.sin(a)];
+    const clipId = 'sec'; const defs = el('defs', {}, g); const cp = el('clipPath', { id: clipId }, defs);
+    el('path', { d: `M${AX},${AY} L${p(a0)[0]},${p(a0)[1]} A${RR},${RR} 0 0 1 ${p(a1)[0]},${p(a1)[1]} Z`, }, cp);
+    const im = el('g', { 'clip-path': `url(#${clipId})` }, g);
+    el('rect', { x: 28, y: 100, width: 236, height: 278, fill: '#111827' }, im);
+    for (let i = 0; i < 520; i++) { const rr = r() * 240, a = a0 + r() * (a1 - a0); const q = [AX + rr * Math.cos(a), AY + rr * Math.sin(a)];
+      el('circle', { cx: q[0], cy: q[1], r: .8 + r() * 1.6, fill: '#9ca3af', opacity: .1 + r() * .35 }, im); }
+    el('ellipse', { cx: 160, cy: 240, rx: 30, ry: 19, fill: '#030712', opacity: .9 }, im);
+    el('ellipse', { cx: 160, cy: 240, rx: 34, ry: 23, fill: 'none', stroke: '#6b7280', 'stroke-width': 1.4, opacity: .7 }, im);
+    const bbox = el('rect', { rx: 3, fill: 'none', stroke: C.amber, 'stroke-width': 2.4 }, g);
+    const bt = txt(g, 0, 0, 'finding', { size: 9.5, weight: 700, fill: C.amber });
+    const patches = []; for (let i = 0; i < 6; i++) for (let j = 0; j < 5; j++) patches.push(el('rect', { x: 62 + i * 30, y: 200 + j * 27 - 24, width: 28, height: 25, fill: C.blue, opacity: 0 }, g));
+    // encoders
+    const venc = node(g, 300, 96, 132, 58, 'Vision encoder', 'patch features', { size: 11.5, fill: C.blueL, stroke: C.blue, tc: C.blue });
+    const tenc = node(g, 300, 250, 132, 58, 'Text prompt', 'clinical context', { size: 11.5, fill: C.amberL, stroke: C.amber, tc: C.amber });
+    const prompt = txt(g, 300, 332, '', { size: 9, mono: true, fill: C.mut });
+    const fus = node(g, 462, 156, 116, 100, 'Cross-modal\nfusion', 'image ⇄ text tokens', { size: 12, fill: C.tealL, stroke: C.teal, tc: C.teal });
+    fus.t.setAttribute('y', 200); fus.s.setAttribute('y', 236);
+    const A = [arrow(g, [[264, 200], [284, 200], [284, 125], [298, 125]], { c: C.blue }), arrow(g, [[432, 125], [447, 125], [447, 190], [460, 190]], { c: C.blue }),
+      arrow(g, [[432, 279], [447, 279], [447, 225], [460, 225]], { c: C.amber }), arrow(g, [[578, 206], [606, 206]], { c: C.teal })];
+    const rep = box(g, 608, 84, 164, 294, { r: 12, fill: '#fff', stroke: C.green });
+    txt(g, 620, 106, 'Structured report', { size: 11.5, weight: 700, fill: C.green, at: 5.5 });
+    const RL = [['FINDINGS', 'Well-defined\nhypoechoic region'], ['LOCATION', 'ROI 1 (marked)'], ['MEASUREMENTS', 'size, margins,\nechogenicity'], ['IMPRESSION', 'For clinician\nreview']];
+    const rows = RL.map((x, i) => { const y = 128 + i * 62; const G = el('g', {}, g); txt(G, 620, y, x[0], { size: 9, weight: 700, fill: C.mut }); const tt = txt(G, 620, y + 14, x[1], { size: 10.5, fill: C.ink }); return { G, tt, full: x[1] }; });
+    const rev = el('g', {}, g); box(rev, 620, 350, 140, 20, { r: 10, fill: C.greenL, stroke: C.green }); txt(rev, 690, 364, '✓ clinician sign-off', { size: 9.5, anchor: 'middle', weight: 700, fill: C.green });
+    txt(g, 28, 410, 'Goal: interpretable outputs a clinician can verify — findings are tied back to image regions.', { size: 10.5, fill: C.mut });
+    const ptxt = 'Prompt: "Describe visible\nfindings in this scan."';
+    return t => {
+      const sc = lin(t, 1.2, 3); const bx = 120 + 20 * (1 - ph(t, 1.2, 3)), by = 205 + 15 * (1 - ph(t, 1.2, 3));
+      const w = 100 - 38 * ph(t, 1.2, 3), h = 84 - 40 * ph(t, 1.2, 3);
+      bbox.setAttribute('x', 160 - w / 2 + 2); bbox.setAttribute('y', 240 - h / 2); bbox.setAttribute('width', w); bbox.setAttribute('height', h); op(bbox, ph(t, 1, 1.4));
+      bt.setAttribute('transform', `translate(${160 - w / 2 + 2},${240 - h / 2 - 5})`); op(bt, ph(t, 2.8, 3.2));
+      patches.forEach((q, i) => { const on = (Math.floor(t * 12) + i * 7) % 11 === 0 && t > .4 && t < 4.5; op(q, on ? .35 : 0); });
+      A[0].set(ph(t, 3.2, 3.8)); op(venc.g, ph(t, 3.5, 4)); A[1].set(ph(t, 4, 4.5));
+      op(tenc.g, ph(t, 3.5, 4)); typed(prompt, ptxt, lin(t, 3.8, 5)); prompt.setText(ptxt.slice(0, Math.floor(ptxt.length * lin(t, 3.8, 5)))); A[2].set(ph(t, 4.5, 5));
+      op(fus.g, ph(t, 4.5, 5)); const pl = 1 + .04 * Math.sin(t * 7) * ph(t, 5, 5.2); fus.g.setAttribute('transform', `translate(520 206) scale(${pl}) translate(-520 -206)`);
+      A[3].set(ph(t, 5.2, 5.7)); op(rep, ph(t, 5.5, 6));
+      rows.forEach((x, i) => { const u = lin(t, 5.8 + i * .55, 6.5 + i * .55); x.tt.setText(x.full.slice(0, Math.floor(x.full.length * u))); op(x.G, u > 0 ? 1 : 0); });
+      op(rev, ph(t, 8.2, 8.7));
+    };
+  }
+});
+
+let s=performance.now();(function L(n){frame(((n-s)/1000)%SCENE.T);requestAnimationFrame(L)})(s);</script></body></html>

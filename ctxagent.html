@@ -1,0 +1,168 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#fff}svg{display:block}</style></head>
+<body><svg id="svg" xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500"></svg>
+<script>// Shared teaser library: deterministic, time-driven SVG scenes (frame(t) sets all state).
+const NS = 'http://www.w3.org/2000/svg';
+const FONT = "Arial,'Liberation Sans','DejaVu Sans',sans-serif";
+const C = {
+  bg: '#ffffff', ink: '#1f2937', mut: '#6b7280', line: '#d1d5db', soft: '#f3f4f6',
+  blue: '#2563eb', teal: '#0d9488', amber: '#d97706', rose: '#e11d48', vio: '#7c3aed', green: '#16a34a',
+  blueL: '#dbeafe', tealL: '#ccfbf1', amberL: '#fef3c7', roseL: '#ffe4e6', vioL: '#ede9fe', greenL: '#dcfce7'
+};
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = x => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const ph = (t, a, b) => ease(clamp((t - a) / (b - a)));   // eased progress a->b
+const lin = (t, a, b) => clamp((t - a) / (b - a));         // linear progress a->b
+const rng = seed => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const op = (e, v) => e.setAttribute('opacity', v);
+function hex(c) { return [1, 3, 5].map(i => parseInt(c.substr(i, 2), 16)); }
+function mix(c1, c2, u) {
+  const a = hex(c1), b = hex(c2);
+  return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * clamp(u)).toString(16).padStart(2, '0')).join('');
+}
+function txt(p, x, y, s, o = {}) {
+  const lines = String(s).split('\n');
+  const lh = (o.size || 12) * 1.25;
+  const e = el('text', {
+    x, y: o.mid ? y - (lines.length - 1) * lh / 2 + (o.size || 12) * .35 : y,
+    'font-size': o.size || 12, 'font-weight': o.weight || 400, fill: o.fill || C.ink,
+    'text-anchor': o.anchor || 'start', style: 'white-space:pre',
+    'font-family': o.mono ? "'DejaVu Sans Mono',Menlo,monospace" : FONT
+  }, p);
+  lines.forEach((l, i) => { const ts = el('tspan', { x, dy: i ? lh : 0 }, e); ts.textContent = l; });
+  if (o.at !== undefined) (window.REV = window.REV || []).push([e, o.at]);
+  e.setText = str => { const L = String(str).split('\n'); while (e.firstChild) e.removeChild(e.firstChild);
+    L.forEach((l, i) => { const ts = el('tspan', { x, dy: i ? lh : 0 }, e); ts.textContent = l; }); };
+  return e;
+}
+function box(p, x, y, w, h, o = {}) {
+  const _b = el('rect', { x, y, width: w, height: h, rx: o.r ?? 8, fill: o.fill || '#fff', stroke: o.stroke || C.line, 'stroke-width': o.sw || 1.5,
+    ...(o.dash ? { 'stroke-dasharray': o.dash } : {}) }, p);
+  if (o.at !== undefined) (window.REV = window.REV || []).push([_b, o.at]);
+  return _b;
+}
+// labelled card: returns {g, r, t, s}
+function node(p, x, y, w, h, title, sub, o = {}) {
+  const g = el('g', {}, p);
+  const r = box(g, x, y, w, h, o);
+  let t, s;
+  if (sub) {
+    t = txt(g, x + w / 2, y + h / 2 - 2, title, { size: o.size || 12, weight: 700, anchor: 'middle', fill: o.tc || C.ink });
+    s = txt(g, x + w / 2, y + h / 2 + 12, sub, { size: o.ss || 9.5, anchor: 'middle', fill: C.mut });
+  } else {
+    t = txt(g, x + w / 2, y + h / 2, title, { size: o.size || 12, weight: 700, anchor: 'middle', fill: o.tc || C.ink, mid: true });
+  }
+  return { g, r, t, s, set(fill, stroke) { r.setAttribute('fill', fill); r.setAttribute('stroke', stroke); } };
+}
+// progressively drawn arrow along polyline pts
+function arrow(p, pts, o = {}) {
+  const col = o.c || C.mut;
+  const d = 'M' + pts.map(q => q.join(',')).join(' L');
+  const path = el('path', { d, fill: 'none', stroke: col, 'stroke-width': o.w || 1.8, pathLength: 1,
+    'stroke-dasharray': '1 1', 'stroke-dashoffset': 1, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, p);
+  const a = pts[pts.length - 2], b = pts[pts.length - 1];
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI, s = o.h || 7;
+  const head = el('polygon', { points: `0,0 ${-s},${-s * .55} ${-s},${s * .55}`, fill: col, opacity: 0,
+    transform: `translate(${b[0]},${b[1]}) rotate(${ang})` }, p);
+  return {
+    path, head,
+    set(u) { path.setAttribute('stroke-dashoffset', 1 - u); op(head, u > .97 ? 1 : 0); },
+    at(u) { const L = path.getTotalLength(); const q = path.getPointAtLength(L * clamp(u)); return [q.x, q.y]; },
+    color(c) { path.setAttribute('stroke', c); head.setAttribute('fill', c); }
+  };
+}
+// travelling packet dot
+function dot(p, c = C.blue, r = 3.5) { const e = el('circle', { r, fill: c, opacity: 0 }, p);
+  return { e, set(pt, o = 1) { if (!pt) { op(e, 0); return; } e.setAttribute('cx', pt[0]); e.setAttribute('cy', pt[1]); op(e, o); } }; }
+function poly(p, c = C.blue, w = 1.6) { return el('polyline', { fill: 'none', stroke: c, 'stroke-width': w, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, p); }
+function setWave(pl, x, y, w, fn, n = 70) {
+  let s = ''; for (let i = 0; i <= n; i++) { const u = i / n; s += (x + u * w).toFixed(1) + ',' + (y + fn(u)).toFixed(1) + ' '; }
+  pl.setAttribute('points', s);
+}
+function typed(e, full, u) { e.setText(full.slice(0, Math.floor(full.length * clamp(u)))); }
+function leaf(p, x, y, s, spots = true) {
+  const G = el('g', { transform: `translate(${x},${y}) scale(${s})` }, p);
+  el('path', { d: 'M0,40 C10,-10 60,-10 80,40 C60,90 10,90 0,40 Z', fill: '#86efac', stroke: C.green, 'stroke-width': 2 }, G);
+  el('path', { d: 'M0,40 L80,40 M20,40 L36,22 M20,40 L36,58 M45,40 L60,26 M45,40 L60,54', stroke: C.green, 'stroke-width': 1.2, fill: 'none' }, G);
+  const sp = [];
+  if (spots) [[30, 24, 5], [52, 52, 6], [40, 38, 4], [62, 32, 3.5]].forEach(q => sp.push(el('circle', { cx: q[0], cy: q[1], r: q[2], fill: '#92400e', opacity: .85 }, G)));
+  return { G, sp };
+}
+
+// Scene bootstrap: header, footer, loop fade
+function scene(cfg) {
+  const svg = document.getElementById('svg');
+  el('rect', { width: 800, height: 500, fill: C.bg }, svg);
+  txt(svg, 28, 34, cfg.name, { size: 21, weight: 700 });
+  txt(svg, 28, 50, cfg.sub, { size: 11, fill: C.mut });
+  const tw = cfg.tag.length * 6.1 + 22;
+  el('rect', { x: 772 - tw, y: 16, width: tw, height: 22, rx: 11, fill: C.soft, stroke: C.line }, svg);
+  txt(svg, 772 - tw / 2, 31, cfg.tag, { size: 10.5, anchor: 'middle', fill: C.mut, weight: 700 });
+  el('line', { x1: 28, x2: 772, y1: 60, y2: 60, stroke: C.line }, svg);
+  const g = el('g', {}, svg);
+  txt(svg, 28, 486, cfg.cap, { size: 11, fill: C.mut });
+  txt(svg, 772, 486, 'Schematic illustration', { size: 10, fill: '#9ca3af', anchor: 'end' });
+  const f = cfg.build(g);
+  window.SCENE = cfg;
+  window.frame = t => { op(g, ph(t, 0, .5) * (1 - ph(t, cfg.T - .6, cfg.T))); f(t); (window.REV || []).forEach(r => op(r[0], ph(t, r[1], r[1] + .5))); };
+  window.frame(0);
+}
+</script><script>scene({
+  name: 'Context-Aware Decision Agent', tag: 'BTech capstone · 2025', T: 11, poster: 8.6,
+  sub: 'On-device multimodal fusion (speech, text, gesture, EEG) with RL-based adaptive decision policies for smart assistants',
+  cap: 'Privacy-preserving, real-time inference: raw signals stay on device; only the chosen action leaves',
+  build(g) {
+    const lanes = [['Speech', C.blue], ['Text', C.teal], ['Gesture', C.amber], ['EEG · wearable', C.rose]];
+    const LY = [88, 168, 248, 328];
+    const cards = lanes.map((l, i) => { const G = el('g', {}, g); box(G, 28, LY[i], 220, 68, { r: 10, fill: '#fafafa' }); txt(G, 40, LY[i] + 16, l[0], { size: 10.5, weight: 700, fill: l[1] }); return G; });
+    const wSp = poly(g, C.blue, 1.8), wEeg = poly(g, C.rose, 1.2);
+    const tok = ['turn', 'the', 'lights', 'down'].map((s, i) => { const G = el('g', {}, g); box(G, 44 + i * 52, 196, 46, 24, { r: 6, fill: C.tealL, stroke: C.teal, sw: 1.2 }); txt(G, 67 + i * 52, 212, s, { size: 10, anchor: 'middle', fill: C.teal }); return G; });
+    const gp = [0, 1, 2, 3, 4, 5, 6].map(() => el('circle', { r: 3, fill: C.amber }, g));
+    const gl = poly(g, C.amber, 1.2);
+    // on-device boundary
+    const bnd = box(g, 274, 78, 350, 326, { r: 16, fill: 'none', stroke: C.vio, dash: '6 5', sw: 1.6 });
+    const lock = el('g', {}, g);
+    el('rect', { x: 290, y: 92, width: 14, height: 11, rx: 2, fill: C.vio }, lock); el('path', { d: 'M293,92 v-4 a4,4 0 0 1 8,0 v4', fill: 'none', stroke: C.vio, 'stroke-width': 1.8 }, lock);
+    const lockT = txt(g, 312, 102, 'On-device · privacy-preserving', { size: 10.5, weight: 700, fill: C.vio });
+    const enc = node(g, 292, 130, 140, 240, '', null, { r: 12, fill: C.vioL, stroke: C.vio });
+    txt(g, 362, 152, 'Fusion encoder', { size: 12, weight: 700, anchor: 'middle', fill: C.vio }); txt(g, 362, 166, 'shared latent state', { size: 9.5, anchor: 'middle', fill: C.mut });
+    const emb = [0, 1, 2, 3, 4, 5, 6, 7].map(i => el('rect', { x: 312 + i * 12, y: 300, width: 8, height: 0, rx: 2, fill: C.vio }, g));
+    const pol = node(g, 458, 130, 150, 240, '', null, { r: 12, fill: C.tealL, stroke: C.teal });
+    txt(g, 533, 152, 'RL policy', { size: 12, weight: 700, anchor: 'middle', fill: C.teal }); txt(g, 533, 166, 'adaptive decisions', { size: 9.5, anchor: 'middle', fill: C.mut });
+    const ring = el('circle', { cx: 533, cy: 262, r: 46, fill: 'none', stroke: C.teal, 'stroke-width': 1.6, 'stroke-dasharray': '4 4' }, g);
+    const rl = ['state', 'action', 'reward'].map((s, i) => { const a = -Math.PI / 2 + i * 2 * Math.PI / 3; const x = 533 + 46 * Math.cos(a), y = 262 + 46 * Math.sin(a);
+      const G = el('g', {}, g); el('circle', { cx: x, cy: y, r: 5, fill: '#fff', stroke: C.teal, 'stroke-width': 1.8 }, G); txt(G, x + (i === 0 ? 0 : i === 1 ? 10 : -10), y + (i === 0 ? -10 : 14), s, { size: 9.5, anchor: i === 0 ? 'middle' : i === 1 ? 'start' : 'end', fill: C.teal }); return G; });
+    const runner = el('circle', { r: 4.5, fill: C.teal }, g);
+    // outputs
+    const outs = ['Adapt tone', 'Suggest break', 'Set reminder'].map((s, i) => node(g, 652, 110 + i * 90, 120, 60, s, ['calmer voice', 'fatigue detected', 'context-aware'][i], { size: 11.5 }));
+    const A0 = [0, 1, 2, 3].map(i => arrow(g, [[248, LY[i] + 34], [292, 250]], { c: lanes[i][1], w: 1.4, h: 5 }));
+    const A1 = arrow(g, [[432, 250], [456, 250]], { c: C.vio });
+    const A2 = arrow(g, [[608, 250], [624, 250], [624, 140], [650, 140]], { c: C.teal }), A2b = arrow(g, [[624, 250], [624, 230], [650, 230]], { c: C.teal }), A2c = arrow(g, [[624, 250], [624, 320], [650, 320]], { c: C.teal });
+    const chips = ['PyTorch', 'LLaMA-3', 'Whisper', 'ROS'].map((s, i) => { const G = el('g', {}, g); box(G, 274 + i * 88, 420, 80, 24, { r: 12, fill: C.soft }); txt(G, 314 + i * 88, 436, s, { size: 10, anchor: 'middle' }); return G; });
+    txt(g, 28, 436, 'Stack', { size: 10, weight: 700, fill: C.mut, at: 6.6 });
+    return t => {
+      cards.forEach((c, i) => op(c, ph(t, .3 + i * .2, .8 + i * .2)));
+      setWave(wSp, 40, 130, 196, u => Math.sin(u * 50 - t * 14) * 16 * Math.abs(Math.sin(u * 5 + t * 1.5)), 80);
+      const r = rng(5); setWave(wEeg, 40, 362, 196, u => (Math.sin(u * 30 - t * 8) * 6 + (Math.sin(u * 190 + t * 20 + Math.floor(t * 12)) * 4)) * (1 + .5 * Math.sin(u * 7)), 120);
+      tok.forEach((k, i) => op(k, ph(t, 1 + i * .3, 1.5 + i * .3)));
+      const kp = [[60, 275], [90, 262], [120, 285], [150, 262], [180, 282], [205, 268], [225, 285]];
+      gp.forEach((p, i) => { p.setAttribute('cx', kp[i][0] + Math.sin(t * 3 + i) * 5); p.setAttribute('cy', kp[i][1] + Math.cos(t * 2.4 + i) * 4); });
+      gl.setAttribute('points', gp.map(p => p.getAttribute('cx') + ',' + p.getAttribute('cy')).join(' '));
+      A0.forEach((a, i) => a.set(ph(t, 1.6 + i * .12, 2.2 + i * .12)));
+      op(bnd, ph(t, 1.8, 2.4)); op(lock, ph(t, 1.8, 2.4)); op(lockT, ph(t, 1.8, 2.4));
+      op(enc.g, ph(t, 2.2, 2.8)); emb.forEach((e, i) => { const h = (30 + 24 * Math.abs(Math.sin(t * 2.2 + i * .9))) * ph(t, 2.8, 3.3); e.setAttribute('height', h); e.setAttribute('y', 340 - h); });
+      A1.set(ph(t, 3.2, 3.7)); op(pol.g, ph(t, 3.5, 4)); op(ring, ph(t, 3.9, 4.4)); rl.forEach(G => op(G, ph(t, 3.9, 4.4)));
+      const a = -Math.PI / 2 + (t * 1.6); runner.setAttribute('cx', 533 + 46 * Math.cos(a)); runner.setAttribute('cy', 262 + 46 * Math.sin(a)); op(runner, ph(t, 4.2, 4.6));
+      [A2, A2b, A2c].forEach(x => x.set(ph(t, 4.8, 5.4)));
+      outs.forEach((o, i) => { op(o.g, ph(t, 5.2 + i * .25, 5.7 + i * .25)); const on = t > 6 && Math.floor((t - 6) / 1.4) % 3 === i; o.set(on ? C.tealL : '#fff', on ? C.teal : C.line); });
+      chips.forEach((c, i) => op(c, ph(t, 6.6 + i * .2, 7.1 + i * .2)));
+    };
+  }
+});
+
+let s=performance.now();(function L(n){frame(((n-s)/1000)%SCENE.T);requestAnimationFrame(L)})(s);</script></body></html>
