@@ -309,7 +309,7 @@ function openAbs(title,venue,abs){
   document.getElementById('abs-modal').classList.add('open');
   document.body.style.overflow='hidden';
 }
-function openGif(name){
+function openGif(filename){
   let modal=document.getElementById('gif-modal');
   if(!modal){
     modal=document.createElement('div');
@@ -319,7 +319,7 @@ function openGif(name){
   }
   modal.innerHTML='';
   const img=document.createElement('img');
-  img.src=`images/teasers/${name}.gif`;
+  img.src='images/teasers/' + filename;
   modal.appendChild(img);
   modal.classList.add('open');
 }
